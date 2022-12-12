@@ -1,8 +1,10 @@
 package nsqlibx
 
 import (
+	"errors"
 	nsq "github.com/nsqio/go-nsq"
 	"log"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -17,8 +19,14 @@ type (
 var (
 	QServer   []string = make([]string, 0, 0)
 	SecretTxt string   = ""
-	Qmutex    sync.Mutex
+	Qmutex    sync.RWMutex
+	randomx   *rand.Rand
 )
+
+func init() {
+	s1 := rand.NewSource(time.Now().UnixNano())
+	randomx = rand.New(s1)
+}
 
 func (q *ConsumeHandler) HandleMessage(m *nsq.Message) error {
 	q.Mutex.Lock()
@@ -45,6 +53,9 @@ func GetChannel(topic string, channel string) chan []byte {
 	handler := new(ConsumeHandler)
 	handler.QChannel = make(chan []byte)
 
+	Qmutex.RLock()
+	defer Qmutex.RUnlock()
+
 	for serv := range QServer {
 		log.Printf("%s\n", "starting to create consumer")
 		go func(server string) {
@@ -61,7 +72,7 @@ func GetChannel(topic string, channel string) chan []byte {
 				err := consumer.ConnectToNSQD(server)
 				if err != nil {
 					log.Printf("%v\n", err)
-					time.Sleep(time.Second)
+					time.Sleep(10 * time.Second)
 					continue
 				}
 				break
@@ -71,4 +82,46 @@ func GetChannel(topic string, channel string) chan []byte {
 	}
 
 	return handler.QChannel
+}
+
+func Publish(topic string, mess []byte) error {
+	Qmutex.RLock()
+	defer Qmutex.RUnlock()
+
+	lenQServer := len(QServer)
+	switch lenQServer {
+	case 0:
+		return errors.New("No Server")
+	default:
+		config := nsq.NewConfig()
+		count := 0
+		server := randomx.Intn(lenQServer)
+		for {
+			servID := server + count
+			if servID >= lenQServer {
+				servID -= lenQServer
+			}
+			producer, err := nsq.NewProducer(QServer[servID], config)
+			if err != nil {
+				count += 1
+				if count >= lenQServer {
+					return errors.New("No NSQ to Publish")
+				}
+				continue
+			}
+			err = producer.Publish(topic, mess)
+			if err != nil {
+				count += 1
+				if count >= lenQServer {
+					return errors.New("No NSQ to Publish")
+				}
+
+				continue
+			}
+			producer.Stop()
+			break
+		}
+	}
+
+	return nil
 }
