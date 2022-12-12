@@ -17,16 +17,12 @@ type (
 )
 
 var (
-	QServer   []string = make([]string, 0, 0)
-	SecretTxt string   = ""
-	Qmutex    sync.RWMutex
-	randomx   *rand.Rand
+	QServer      []string = make([]string, 0, 0)
+	SecretTxt    string   = ""
+	Qmutex       sync.RWMutex
+	randomx      *rand.Rand    = rand.New(rand.NewSource(time.Now().UnixNano()))
+	PoolInterval time.Duration = 10 * time.Second
 )
-
-func init() {
-	s1 := rand.NewSource(time.Now().UnixNano())
-	randomx = rand.New(s1)
-}
 
 func (q *ConsumeHandler) HandleMessage(m *nsq.Message) error {
 	q.Mutex.Lock()
@@ -61,6 +57,7 @@ func GetChannel(topic string, channel string) chan []byte {
 		go func(server string) {
 			log.Printf("connecting to %s\n", server)
 			config := nsq.NewConfig()
+			config.Set("lookupd_poll_interval", PoolInterval)
 			consumer, err := nsq.NewConsumer(topic, channel, config)
 			if err != nil {
 				log.Fatal(err)
@@ -72,7 +69,7 @@ func GetChannel(topic string, channel string) chan []byte {
 				err := consumer.ConnectToNSQD(server)
 				if err != nil {
 					log.Printf("%v\n", err)
-					time.Sleep(10 * time.Second)
+					time.Sleep(PoolInterval)
 					continue
 				}
 				break
