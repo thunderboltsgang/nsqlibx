@@ -14,6 +14,8 @@ type (
 		QChannel chan []byte
 		Mutex    sync.Mutex
 	}
+
+	nsqlogger struct{}
 )
 
 var (
@@ -21,7 +23,8 @@ var (
 	SecretTxt    string   = ""
 	Qmutex       sync.RWMutex
 	randomx      *rand.Rand    = rand.New(rand.NewSource(time.Now().UnixNano()))
-	PoolInterval time.Duration = 10 * time.Second
+	PoolInterval time.Duration = time.Second
+	logging      bool          = false
 )
 
 func (q *ConsumeHandler) HandleMessage(m *nsq.Message) error {
@@ -37,6 +40,15 @@ func (q *ConsumeHandler) HandleMessage(m *nsq.Message) error {
 	return nil
 }
 
+func (l nsqlogger) Output(calldepth int, s string) error {
+	switch logging {
+	case true:
+		log.Printf("%s\n", s)
+	}
+	return nil
+
+}
+
 func AddQServer(serv string) {
 	Qmutex.Lock()
 	defer Qmutex.Unlock()
@@ -48,8 +60,11 @@ func SetPoolInterval(intv time.Duration) {
 	PoolInterval = intv
 }
 
+func Logging(t bool) {
+	logging = t
+}
+
 func GetChannel(topic string, channel string) chan []byte {
-	log.Printf("%s\n", "start to create channel")
 	handler := new(ConsumeHandler)
 	handler.QChannel = make(chan []byte)
 
@@ -57,9 +72,7 @@ func GetChannel(topic string, channel string) chan []byte {
 	defer Qmutex.RUnlock()
 
 	for serv := range QServer {
-		log.Printf("%s\n", "starting to create consumer")
 		go func(server string) {
-			log.Printf("connecting to %s\n", server)
 			config := nsq.NewConfig()
 			config.Set("lookupd_poll_interval", PoolInterval)
 			consumer, err := nsq.NewConsumer(topic, channel, config)
@@ -67,12 +80,12 @@ func GetChannel(topic string, channel string) chan []byte {
 				log.Fatal(err)
 			}
 
+			consumer.SetLogger(&nsqlogger{}, nsq.LogLevelInfo)
 			consumer.AddHandler(handler)
 
 			for {
 				err := consumer.ConnectToNSQD(server)
 				if err != nil {
-					log.Printf("%v\n", err)
 					time.Sleep(PoolInterval)
 					continue
 				}
@@ -110,6 +123,7 @@ func Publish(topic string, mess []byte) error {
 				}
 				continue
 			}
+			producer.SetLogger(&nsqlogger{}, nsq.LogLevelInfo)
 			err = producer.Publish(topic, mess)
 			if err != nil {
 				count += 1
