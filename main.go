@@ -44,6 +44,10 @@ func AddQServer(serv string) {
 	QServer = append(QServer, serv)
 }
 
+func SetPoolInterval(intv time.Duration) {
+	PoolInterval = intv
+}
+
 func GetChannel(topic string, channel string) chan []byte {
 	log.Printf("%s\n", "start to create channel")
 	handler := new(ConsumeHandler)
