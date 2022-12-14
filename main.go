@@ -2,11 +2,12 @@ package nsqlibx
 
 import (
 	"errors"
-	nsq "github.com/nsqio/go-nsq"
 	"log"
 	"math/rand"
 	"sync"
 	"time"
+
+	nsq "github.com/nsqio/go-nsq"
 )
 
 type (
