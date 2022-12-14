@@ -24,7 +24,7 @@ var (
 	SecretTxt    string   = ""
 	Qmutex       sync.RWMutex
 	randomx      *rand.Rand    = rand.New(rand.NewSource(time.Now().UnixNano()))
-	PoolInterval time.Duration = time.Second
+	PollInterval time.Duration = time.Second
 	logging      bool          = false
 )
 
@@ -57,8 +57,8 @@ func AddQServer(serv string) {
 	QServer = append(QServer, serv)
 }
 
-func SetPoolInterval(intv time.Duration) {
-	PoolInterval = intv
+func SetPollInterval(intv time.Duration) {
+	PollInterval = intv
 }
 
 func Logging(t bool) {
@@ -75,7 +75,7 @@ func GetChannel(topic string, channel string) chan []byte {
 	for serv := range QServer {
 		go func(server string) {
 			config := nsq.NewConfig()
-			config.Set("lookupd_poll_interval", PoolInterval)
+			config.Set("lookupd_poll_interval", PollInterval)
 			consumer, err := nsq.NewConsumer(topic, channel, config)
 			if err != nil {
 				log.Fatal(err)
@@ -87,7 +87,7 @@ func GetChannel(topic string, channel string) chan []byte {
 			for {
 				err := consumer.ConnectToNSQD(server)
 				if err != nil {
-					time.Sleep(PoolInterval)
+					time.Sleep(PollInterval)
 					continue
 				}
 				break
