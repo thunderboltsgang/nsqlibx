@@ -1,6 +1,7 @@
 package nsqlibx
 
 import (
+	b64 "encoding/base64"
 	"errors"
 	"log"
 	"math/rand"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	mc "github.com/authapon/mcryptzero"
 	nsq "github.com/nsqio/go-nsq"
 )
 
@@ -32,6 +34,7 @@ var (
 	logging         bool          = false
 	TimeoutDuration time.Duration = time.Minute
 	RandomTopicLen  int           = 20
+	SaltSize        int           = 8
 )
 
 func (q *ConsumeHandler) HandleMessage(m *nsq.Message) error {
@@ -41,7 +44,9 @@ func (q *ConsumeHandler) HandleMessage(m *nsq.Message) error {
 	if len(m.Body) == 0 {
 		return nil
 	}
-	data := strings.SplitN(string(m.Body), ":", 3)
+
+	data := strings.SplitN(Decrypt(string(m.Body)), ":", 3)
+
 	switch len(data) {
 	case 3:
 		if data[1] == SecretText {
@@ -57,7 +62,6 @@ func (l nsqlogger) Output(calldepth int, s string) error {
 		log.Printf("%s\n", s)
 	}
 	return nil
-
 }
 
 func AddQServer(serv string) {
@@ -77,6 +81,10 @@ func SetPollInterval(intv time.Duration) {
 
 func SetSecretText(secret string) {
 	SecretText = secret
+}
+
+func SetSaltSize(salt int) {
+	SaltSize = salt
 }
 
 func Logging(t bool) {
@@ -171,7 +179,8 @@ func Publishx(topic string, reply string, mess string) error {
 				continue
 			}
 			producer.SetLogger(&nsqlogger{}, nsq.LogLevelInfo)
-			err = producer.Publish(topic, []byte(reply+":"+SecretText+":"+mess))
+			datax := Encrypt(reply + ":" + SecretText + ":" + mess)
+			err = producer.Publish(topic, []byte(datax))
 			if err != nil {
 				continue
 			}
@@ -262,8 +271,31 @@ func PublishReplyWithTimeout(topic string, mess string, timeout time.Duration) s
 func GetRandomTopic(replylen int) string {
 	alphabet := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	output := ""
-	for i := 0; i < len(alphabet); i++ {
+	for i := 0; i < replylen; i++ {
 		output += string(alphabet[randomx.Intn(len(alphabet))])
 	}
 	return output
+}
+
+func Encrypt(data string) string {
+	salt := GetRandomTopic(SaltSize)
+	datax := salt + ":" + b64.StdEncoding.EncodeToString(mc.Encrypt([]byte(data), []byte(SecretText+salt)))
+	return datax
+}
+
+func Decrypt(datax string) string {
+	dataxSplit := strings.SplitN(datax, ":", 2)
+
+	if len(dataxSplit) != 2 {
+		return ""
+	}
+
+	if len(dataxSplit[0]) != SaltSize {
+		return ""
+	}
+	dataDC, err := b64.StdEncoding.DecodeString(dataxSplit[1])
+	if err != nil {
+		return ""
+	}
+	return string(mc.Decrypt([]byte(dataDC), []byte(SecretText+dataxSplit[0])))
 }
