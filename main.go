@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 
 type (
 	ConsumeHandler struct {
-		QChannel    chan []byte
+		QChannel    chan string
 		ExitChannel chan bool
 		Consumers   []*nsq.Consumer
 		Running     bool
@@ -24,7 +25,7 @@ type (
 
 var (
 	QServer         []string = make([]string, 0, 0)
-	SecretTxt       string   = ""
+	SecretText      string   = ""
 	Qmutex          sync.RWMutex
 	randomx         *rand.Rand    = rand.New(rand.NewSource(time.Now().UnixNano()))
 	PollInterval    time.Duration = time.Second
@@ -40,9 +41,13 @@ func (q *ConsumeHandler) HandleMessage(m *nsq.Message) error {
 	if len(m.Body) == 0 {
 		return nil
 	}
-
-	q.QChannel <- m.Body
-
+	data := strings.SplitN(string(m.Body), ":", 3)
+	switch len(data) {
+	case 3:
+		if data[1] == SecretText {
+			q.QChannel <- data[0] + ":" + data[2]
+		}
+	}
 	return nil
 }
 
@@ -70,18 +75,22 @@ func SetPollInterval(intv time.Duration) {
 	PollInterval = intv
 }
 
+func SetSecretText(secret string) {
+	SecretText = secret
+}
+
 func Logging(t bool) {
 	logging = t
 }
 
-func GetChannel(topic string, channel string) chan []byte {
+func GetChannel(topic string, channel string) chan string {
 	ch, _ := GetChannelWithExit(topic, channel)
 	return ch
 }
 
-func GetChannelWithExit(topic string, channel string) (chan []byte, chan bool) {
+func GetChannelWithExit(topic string, channel string) (chan string, chan bool) {
 	handler := new(ConsumeHandler)
-	handler.QChannel = make(chan []byte)
+	handler.QChannel = make(chan string)
 	handler.ExitChannel = make(chan bool)
 	handler.Consumers = make([]*nsq.Consumer, 0)
 	handler.Running = true
@@ -140,7 +149,11 @@ func GetChannelWithExit(topic string, channel string) (chan []byte, chan bool) {
 	return handler.QChannel, handler.ExitChannel
 }
 
-func Publish(topic string, mess []byte) error {
+func Publish(topic string, mess string) error {
+	return Publishx(topic, "", mess)
+}
+
+func Publishx(topic string, reply string, mess string) error {
 	Qmutex.RLock()
 	defer Qmutex.RUnlock()
 
@@ -150,44 +163,69 @@ func Publish(topic string, mess []byte) error {
 		return errors.New("No Server")
 	default:
 		config := nsq.NewConfig()
-		count := 0
-		server := randomx.Intn(lenQServer)
-		for {
-			servID := server + count
-			if servID >= lenQServer {
-				servID -= lenQServer
-			}
-			producer, err := nsq.NewProducer(QServer[servID], config)
+		server := getRandomServer()
+		success := false
+		for _, v := range server {
+			producer, err := nsq.NewProducer(QServer[server[v]], config)
 			if err != nil {
-				count += 1
-				if count >= lenQServer {
-					return errors.New("No NSQ to Publish")
-				}
 				continue
 			}
 			producer.SetLogger(&nsqlogger{}, nsq.LogLevelInfo)
-			err = producer.Publish(topic, mess)
+			err = producer.Publish(topic, []byte(reply+":"+SecretText+":"+mess))
 			if err != nil {
-				count += 1
-				if count >= lenQServer {
-					return errors.New("No NSQ to Publish")
-				}
-
 				continue
 			}
 			producer.Stop()
+			success = true
 			break
+		}
+		if !success {
+			return errors.New("No NSQ to publish ...")
 		}
 	}
 
 	return nil
 }
 
-func PublishReply(topic string, mess []byte) []byte {
+func getRandomServer() []int {
+	lenQserver := len(QServer)
+	switch lenQserver {
+	case 0:
+		return make([]int, 0)
+	case 1:
+		output := make([]int, 1)
+		output[0] = 0
+		return output
+	default:
+		output := make([]int, 0)
+		serverMarks := make([]int, lenQserver)
+
+		for i := lenQserver; i > 0; i-- {
+			servID := randomx.Intn(i)
+			count := 0
+			for k := 0; k < lenQserver; k++ {
+				switch serverMarks[k] {
+				case 0:
+					if servID == count {
+						output = append(output, k)
+						serverMarks[k] = 1
+						continue
+					}
+					count += 1
+				case 1:
+					continue
+				}
+			}
+		}
+		return output
+	}
+}
+
+func PublishReply(topic string, mess string) string {
 	return PublishReplyWithTimeout(topic, mess, TimeoutDuration)
 }
 
-func PublishReplyWithTimeout(topic string, mess []byte, timeout time.Duration) []byte {
+func PublishReplyWithTimeout(topic string, mess string, timeout time.Duration) string {
 	replyTopic := GetRandomTopic(RandomTopicLen)
 	reply := make(chan interface{})
 	timeoutCh := make(chan bool)
@@ -209,13 +247,16 @@ func PublishReplyWithTimeout(topic string, mess []byte, timeout time.Duration) [
 		timeoutCh <- true
 	}()
 
+	err := Publishx(topic, replyTopic, mess)
+	if err != nil {
+		return ""
+	}
 	getreply := <-reply
 	switch getreply.(type) {
-	case []byte:
-		return getreply.([]byte)
-	case bool:
+	case string:
+		return getreply.(string)
 	}
-	return make([]byte, 0, 0)
+	return ""
 }
 
 func GetRandomTopic(replylen int) string {
